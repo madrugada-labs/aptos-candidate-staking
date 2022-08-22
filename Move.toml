@@ -1,0 +1,10 @@
+[package]
+name = 'candidate_staking'
+version = '0.0.1'
+
+[addresses]
+CandidateStaking = "5cc72af79694f5b65f78b4fd5f6e7a318271d25b4f7ff5a1f973999061ee4ce0"
+CoreResources = "0xA550C18"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework/", rev="devnet"}
