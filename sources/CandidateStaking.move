@@ -1,7 +1,8 @@
 module CandidateStaking::Stakings {
 
     use std::signer;
-    // use std::vector;
+    use std::vector;
+
     use aptos_framework::coin;
     use aptos_framework::aptos_coin;
     use aptos_framework::account;
@@ -22,6 +23,7 @@ module CandidateStaking::Stakings {
     const ESELECTED_BUT_CANT_TRANSFER: u64 = 11;
     const ENOT_STAKED_YET: u64 = 12;
     const ECANNOT_UNSTAKE_AGAIN: u64 = 13;
+    const EINVALID_SIGNER: u64 = 14;
 
     // Application States
     const PENDING: u8 = 0;
@@ -54,23 +56,30 @@ module CandidateStaking::Stakings {
 
     public entry fun init_admin(admin: &signer) {
         let admin_addr = signer::address_of(admin);
+        assert!(admin_addr == @CandidateStaking, 0);
         assert!(!exists<Admin>(admin_addr), EADMIN_ALREADY_EXISTS);
         move_to<Admin>(admin, Admin{authority: admin_addr});
     }
 
-    public entry fun init_job(recruiter: &signer, job_id: vector<u8>) {
-        let recruiter_addr = signer::address_of(recruiter);
-        assert!(!exists<Job>(recruiter_addr), 1);
-        let (escrow, escrow_signer_cap) = account::create_resource_account(recruiter, job_id);
+    public entry fun init_job(admin: &signer, job_id: vector<u8>) {
+        let admin_addr = signer::address_of(admin);
+        assert!(exists<Admin>(admin_addr), EINVALID_SIGNER);
+        let escrow_id = job_id;
+        vector::append(&mut escrow_id, b"01"); // 1 indicates escrow 
+        let (escrow, escrow_signer_cap) = account::create_resource_account(admin, escrow_id);
+        let (_, job_signer_cap) = account::create_resource_account(admin, job_id);
+        let job_account_from_cap = account::create_signer_with_capability(&job_signer_cap);
         let escrow_addr = signer::address_of(&escrow);
         coins::register<aptos_coin::AptosCoin>(&escrow);
-        move_to<Job>(recruiter, Job{total_reward_to_be_given: 0, resource: escrow_addr, resource_cap: escrow_signer_cap});
+        move_to<Job>(&job_account_from_cap, Job{total_reward_to_be_given: 0, resource: escrow_addr, resource_cap: escrow_signer_cap});
     }
 
-    public entry fun init_application(applicant: &signer, _application_id: vector<u8>, max_allowed_stake: u64) {
-       let applicant_addr = signer::address_of(applicant);
-       assert!(!exists<Application>(applicant_addr), EAPPLICATION_ALREADY_EXISTS);
-       move_to<Application>(applicant, Application{status: PENDING, staked_amount: 0, max_allowed_stake: max_allowed_stake, total_reward_amount: 0, update_reward_value_in_job: false});
+    public entry fun init_application(admin: &signer, application_id: vector<u8>, max_allowed_stake: u64) {
+       let admin_addr = signer::address_of(admin);
+       assert!(exists<Admin>(admin_addr), EINVALID_SIGNER);
+       let (_, application_signer_cap) = account::create_resource_account(admin, application_id);
+       let application_account_from_cap = account::create_signer_with_capability(&application_signer_cap);
+       move_to<Application>(&application_account_from_cap, Application{status: PENDING, staked_amount: 0, max_allowed_stake: max_allowed_stake, total_reward_amount: 0, update_reward_value_in_job: false});
     }
 
     public entry fun stake(staker: &signer,recruiter: address, applicant: address, amount: u64) acquires Job, Application, StakeInfo {  
@@ -150,18 +159,29 @@ module CandidateStaking::Stakings {
         burn_cap: coin::BurnCapability<aptos_coin::AptosCoin>,
     }
 
-    #[test(admin = @0x4, recruiter = @0x2, applicant = @0x3, staker = @0x1, faucet = @CoreResources)]
-    public entry fun can_init_admin(admin: signer, recruiter: signer, applicant: signer, staker: signer, faucet: signer) acquires Job, Application, StakeInfo {
+    #[test_only]
+    public entry fun get_resource_account(source: address, seed: vector<u8>): address {
+        use std::hash;
+        use std::bcs;
+        use std::vector;
+        let bytes = bcs::to_bytes(&source);
+        vector::append(&mut bytes, seed);
+        let addr = account::create_address_for_test(hash::sha3_256(bytes));
+        addr
+    }
+
+    #[test(admin = @CandidateStaking, recruiter = @0x2, applicant = @0x3, staker = @0x1, faucet = @CoreResources)]
+    public entry fun can_init_admin(admin: signer, staker: signer, faucet: signer) acquires Job, Application, StakeInfo {
         init_admin(&admin);
         let admin_addr = signer::address_of(&admin);
         assert!(exists<Admin>(admin_addr), EADMIN_NOT_CREATED);
 
-        init_job(&recruiter, b"01");
-        let recruiter_addr = signer::address_of(&recruiter);
-        assert!(exists<Job>(recruiter_addr), EJOB_NOT_CREATED);
+        init_job(&admin, b"01");
+        let job_addr = get_resource_account(admin_addr, b"01");
+        assert!(exists<Job>(job_addr), EJOB_NOT_CREATED);
 
-        init_application(&applicant, b"01", 10000);
-        let applicant_addr = signer::address_of(&applicant);
+        init_application(&admin, b"02", 10000);
+        let applicant_addr = get_resource_account(admin_addr, b"02");
         assert!(exists<Application>(applicant_addr), EAPPLICATION_NOT_CREATED);
 
         let staker_addr = signer::address_of(&staker);
@@ -175,19 +195,21 @@ module CandidateStaking::Stakings {
         assert!(coin::balance<aptos_coin::AptosCoin>(faucet_addr) == 18446744073709551615, EINVALID_BALANCE);
         coin::register_for_test<aptos_coin::AptosCoin>(&staker);
         coin::transfer<aptos_coin::AptosCoin>(&faucet, staker_addr, 100);
-        stake(&staker, recruiter_addr, applicant_addr, 100);
+        stake(&staker, job_addr, applicant_addr, 100);
         assert!(coin::balance<aptos_coin::AptosCoin>(staker_addr) == 0, EINVALID_BALANCE);
 
-        change_application_state(&admin, recruiter_addr, applicant_addr, SELECTED);
+        change_application_state(&admin, job_addr, applicant_addr, SELECTED);
         let application_info = borrow_global<Application>(applicant_addr); 
         assert!(application_info.status == SELECTED, EINVALID_STATUS);
 
-        let job_info = borrow_global<Job>(recruiter_addr);
+        let job_info = borrow_global<Job>(job_addr);
         let resource_address = job_info.resource; 
         coin::transfer<aptos_coin::AptosCoin>(&faucet, resource_address, job_info.total_reward_to_be_given);
-        unstake(&staker, recruiter_addr, applicant_addr);
+        unstake(&staker, job_addr, applicant_addr);
         assert!(coin::balance<aptos_coin::AptosCoin>(staker_addr) == 300, EINVALID_BALANCE);
 
+        let test_resource_account = get_resource_account(admin_addr, b"01");
+        assert!(job_addr == test_resource_account, 0);
 
     }
 }
