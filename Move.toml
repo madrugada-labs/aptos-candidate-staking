@@ -1,9 +1,9 @@
 [package]
-name = 'candidate_staking'
-version = '0.0.1'
+name = 'candidate_staking2'
+version = '0.0.3'
 
 [addresses]
-CandidateStaking = "5cc72af79694f5b65f78b4fd5f6e7a318271d25b4f7ff5a1f973999061ee4ce0"
+CandidateStaking = "0x9db1d65a321e4a86f8098cb04e76fce098890b84211fa06d65f24dc644bf0fec"
 CoreResources = "0xA550C18"
 
 [dependencies]
